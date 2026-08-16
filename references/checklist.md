@@ -1,6 +1,6 @@
 # Security Doctor — The Checklist
 
-The scored audit. Each item: what to verify, how to detect the gap (grep or live probe), and the fix-template number ([T#] in `fix-templates.md`). **Report a checkbox as ✅ only with file:line evidence or a live-probe result — never from "looks fine."** Status values: ✅ done · ❌ gap · ⚠️ partial/hardening-only · ⏭️ n/a (say why).
+The scored audit — 33 manual checks (verify by hand/probe) + a 6-tool **scanner layer** (domain 9, items 34–39; see `tooling.md`). Each item: what to verify, how to detect the gap (grep or live probe), and the fix-template number ([T#] in `fix-templates.md`). **Report a checkbox as ✅ only with file:line evidence or a live-probe/scanner result — never from "looks fine."** Status values: ✅ done · ❌ gap · ⚠️ partial/hardening-only · ⏭️ n/a (say why).
 
 Items marked ⚙ are stack-specific (Supabase/Vercel) — translate the intent for other stacks; the underlying law (in `knowledge-base.md`) is portable.
 
@@ -54,6 +54,15 @@ Items marked ⚙ are stack-specific (Supabase/Vercel) — translate the intent f
 33. **Security tests wired into CI** — the anon-probe harness + source ratchet run in an actual CI job; every new assertion FAILS against the unfixed state first. [T2]
 
 ---
-**Scoring output:** a table `item · status · evidence (file:line or live-probe result)`, then the gap list in priority order (live-fire / unauthenticated-escalation first), then fixes. Small fixes: implement in the same pass. Big/destructive: propose first.
+## Automated scanner layer (domain 9 — run alongside the manual checks; catches classes the checklist structurally can't. Full detail in `tooling.md`)
+34. **Supply-chain malware** — Socket (behavioral) or OSV-Scanner on every dependency change. `npm audit` only knows disclosed CVEs; this catches typosquats / hijacked / malicious-install-script packages with no advisory yet. [Tooling §1]
+35. **Deep SAST on own code** — Semgrep (`p/javascript p/nodejs p/owasp-top-ten` + stack rulesets) taint-tracks input→sink in your own routes. No SAST otherwise. [Tooling §2]
+36. **Verified secrets** — TruffleHog `--only-verified` / `--results=verified,unknown` live-validates keys (a leaked service-role key bypasses all RLS). Layer on top of gitleaks, don't replace. [Tooling §3]
+37. **Live DAST** — Nuclei (`-tags exposure,misconfiguration`) against every deployed host; the only *external* probe (exposed `.env`, DB-studio leak, headers-as-served). Own/authorized targets, weekly. [Tooling §4]
+38. **CI / Actions hardening** — zizmor on `.github/workflows/`: unpinned actions (SHA-pin), `${{ github.event.* }}` injection, over-broad `GITHUB_TOKEN`, `persist-credentials`. Your CI holds prod secrets = attack surface. [Tooling §5]
+39. **LLM red-team regression** — promptfoo redteam suite per tool-using agent route, so a prompt edit can't silently reopen the fencing. Turns manual fencing into a CI gate. [Tooling §6]
+
+---
+**Scoring output:** a table `item · status · evidence (file:line, live-probe, or scanner result)`, then the gap list in priority order (live-fire / unauthenticated-escalation first), then fixes. Small fixes: implement in the same pass. Big/destructive: propose first. Record 0-finding scanner runs as evidence — and verify each scanner actually ran (a skipped/errored scan reads identical to a clean one).
 
 **The five traps that look like success:** (a) a test that passed because it never ran (empty body, skipped-when-unconfigured, `before()` skip-eval bug); (b) an error from the wrong layer (PGRST204/PGRST202/22P02 ≠ denied); (c) revoking a column while the table grant stands (silent no-op); (d) assuming a function is private from its name (read the code path); (e) fixing the DB before deploying the client change (deploy the query fix first).

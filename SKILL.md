@@ -1,6 +1,6 @@
 ---
 name: security-doctor
-description: Audit any web app's security against a battle-tested 33-point checklist, report exactly what's missing with the fix for each gap, then implement the fixes. Covers anon/RLS lockdown, privilege-escalation, auth/2FA, CSP, prompt-injection, payments, and supply chain. Trigger on "security audit", "security check", "is <app> safe to launch", "harden <app>", "run the security checklist", or before launching any app/feature touching auth, payments, uploads, or AI. Stack-portable — deepest on Supabase + Vercel + Stripe.
+description: Audit any web app's security against a battle-tested 39-point checklist (33 manual checks + a 6-tool automated scanner layer), report exactly what's missing with the fix for each gap, then implement the fixes. Covers anon/RLS lockdown, privilege-escalation, auth/2FA, CSP, prompt-injection, payments, and supply chain — plus a scanner layer (Semgrep SAST, TruffleHog verified secrets, Nuclei live DAST, zizmor CI hardening, Socket supply-chain malware, promptfoo LLM red-team). Trigger on "security audit", "security check", "is <app> safe to launch", "harden <app>", "run the security checklist", or before launching any app/feature touching auth, payments, uploads, or AI. Stack-portable — deepest on Supabase + Vercel + Stripe.
 ---
 
 # Security Doctor
@@ -13,8 +13,9 @@ Built to be reusable across any app. The knowledge is generalized from real prod
 **The publishable/anon key ships in the client bundle — every permission the `anon` role holds is granted to the entire internet.** A missing GRANT fails closed; a missing RLS policy fails open. And: **verify, never infer** — a finding is real only when a live probe with the public key returned the denial code, not when code "looks admin-only." The five traps that fake success are in `references/checklist.md`; read them before reporting anything green.
 
 ## Reference files (load as needed — don't dump all into context)
-- `references/checklist.md` — the 33-item scored checklist: what to verify, how to detect each gap (grep/probe), and which fix template applies. **This is the audit spine.**
+- `references/checklist.md` — the 39-item scored checklist (33 manual + 6 scanner): what to verify, how to detect each gap (grep/probe/scan), and which fix template applies. **This is the audit spine.**
 - `references/fix-templates.md` — 12 copy-paste-and-adapt fixes (SQL + JS), each with pitfalls and the failure mode it closes.
+- `references/tooling.md` — the **scanner layer** (domain 9): Semgrep, TruffleHog, Nuclei, zizmor, Socket/OSV, promptfoo + audit-firm companion skills. Install + exact command + what class each catches that the manual pass can't. Load when running the automated pass or wiring CI.
 - `references/knowledge-base.md` — the *why* behind every check: the incident class that taught it, grouped by theme. Read a section when a finding is subtle or the user asks why.
 
 ## Workflow
@@ -35,7 +36,9 @@ Walk the checklist top to bottom. For each item:
 - Record status (✅/❌/⚠️/⏭️) **with evidence** — `file:line` or the exact probe result. Never mark ✅ from appearance.
 - Probing rules that keep you honest (full detail in `knowledge-base.md` §e): read the 42501 MESSAGE not just the code; send a REAL column value (a `{}` PATCH proves nothing); a bare `[]` proves nothing; probe PER COLUMN; carry a known-blocked AND a known-open control; probe inserts without `return=representation`. **Every probe that writes must write something the product cannot surface** (draft/inactive state, or a constraint-violating payload that never creates a row) — and clean up.
 
-For a large surface, fan out read-only sub-agents by section (DB/RLS, auth, CSP/headers, payments, AI, supply chain) and merge — but you own the merge and the live re-verification.
+**Run the scanner layer (domain 9 — `tooling.md`).** Alongside the manual checks, run the automated scanners that catch classes the checklist can't: **Semgrep** (SAST on the app's own code), **TruffleHog** `--only-verified` (secrets), **zizmor** (`.github/workflows/`) during the code pass; **Nuclei** (`-tags exposure,misconfiguration`, own/authorized hosts only) during the live pass; **Socket/OSV** at dependency review; **promptfoo** against tool-using LLM routes. Install one-liners + exact commands are in `tooling.md`. Record 0-finding runs as evidence, and confirm each scanner actually ran (a skipped/errored scan looks identical to a clean one). Treat a heuristic scanner's CRITICAL on a *security* skill/tool as a likely false positive — read the code before believing it.
+
+For a large surface, fan out read-only sub-agents by section (DB/RLS, auth, CSP/headers, payments, AI, supply chain, scanner layer) and merge — but you own the merge and the live re-verification.
 
 ### 3. Report (exactly what's missing + the fix)
 Produce, in the final message:
@@ -53,7 +56,7 @@ If the user was only *asking* whether the app is safe (not asking you to change 
 - Preview any UI-affecting change; then **verify live** the fix actually landed (real signal, known control) and **don't over-verify** — one clean pass, then ship.
 
 ### 5. Prove it (leave a ratchet)
-Where the stack supports it, leave the **anon-probe harness + source ratchet** ([T2]) wired into CI so the fix can't silently regress. A guard that passes before the fix is worthless — confirm it fails first.
+Where the stack supports it, leave the **anon-probe harness + source ratchet** ([T2]) wired into CI so the fix can't silently regress. A guard that passes before the fix is worthless — confirm it fails first. Add the cheap scanners to the same CI gate — **gitleaks + Semgrep (SARIF) + zizmor** on every push; **Nuclei** weekly / post-deploy; **promptfoo** on the agent routes (`tooling.md`). Each scanner in CI is a standing ratchet against the class it covers.
 
 ## Adapting to a non-Supabase / non-Vercel app
 The checklist's intent is universal; only the mechanism changes. Authorization must key on a server-trusted identity claim (not a client field); privileged fields must be non-writable by the client; every privileged route re-checks server-side; untrusted content into an LLM gets fenced; secrets never reach the client or git history; CSP/headers ship enforcing after a report-only bake. Translate each ⚙ item to the target's equivalent (row security, grants, middleware) and keep the process laws in `knowledge-base.md §i` verbatim — they're stack-agnostic.
