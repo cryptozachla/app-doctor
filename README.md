@@ -44,7 +44,7 @@ Field lessons from real launch passes (absolute legal links across subdomains, t
 
 ## The App Doctor Score
 
-Every audit ends with **one number out of 100** — how much was already set up before the audit walked in. 74 checks, weighted: 🔴 criticals (exploitable-now / sue-now) are 5 points, 🟡 important hardening is 3, 🟢 polish is 1; N/A items (no payments, no AI) leave the denominator so they never count against you. Two honesty caps keep the number from flattering: any open security critical caps the score at **49**, an open legal blocker caps it at **69** — an app leaking data doesn't get to score 80 on neatness. 90+ means you barely needed the audit; below 50 means the fix pass is the point.
+Every audit ends with **one number out of 100** — how much was already set up before the audit walked in. 74 checks summing to exactly 100 points: 🔴 the 14 criticals (exploitable-now / sue-now) are 4 points each (56), 🟡 the 40 important hardening checks are 1 point each (40), 🟢 the 20-item polish sweep shares a 4-point bucket; N/A items (no payments, no AI) rescale within their tier so every audit is still out of 100 and features you don't have never count against you. Two honesty caps keep the number from flattering: any open security critical caps the score at **49**, an open legal blocker caps it at **69** — an app leaking data doesn't get to score 80 on neatness. 90+ means you barely needed the audit; below 50 means the fix pass is the point.
 
 ## The 12 fix templates
 
