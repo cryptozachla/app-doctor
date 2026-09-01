@@ -1,9 +1,9 @@
 ---
-name: security-doctor
-description: Audit any web app's security against a battle-tested 39-point checklist (33 manual checks + a 6-tool automated scanner layer), report exactly what's missing with the fix for each gap, then implement the fixes. Covers anon/RLS lockdown, privilege-escalation, auth/2FA, CSP, prompt-injection, payments, and supply chain — plus a scanner layer (Semgrep SAST, TruffleHog verified secrets, Nuclei live DAST, zizmor CI hardening, Socket supply-chain malware, promptfoo LLM red-team). Trigger on "security audit", "security check", "is <app> safe to launch", "harden <app>", "run the security checklist", or before launching any app/feature touching auth, payments, uploads, or AI. Stack-portable — deepest on Supabase + Vercel + Stripe.
+name: app-doctor
+description: Security Doctor + Pre-App/Launch Checklist. Audit any web app's security against a battle-tested 39-point checklist (33 manual checks + a 6-tool automated scanner layer) AND its launch-readiness against a 4-domain pre-app checklist (legal/compliance, auth hardening extras, last-mile polish, day-one retention), report exactly what's missing with the fix for each gap, then implement the fixes. Covers anon/RLS lockdown, privilege-escalation, auth/2FA, CSP, prompt-injection, payments, and supply chain — plus a scanner layer (Semgrep SAST, TruffleHog verified secrets, Nuclei live DAST, zizmor CI hardening, Socket supply-chain malware, promptfoo LLM red-team). Trigger on "security audit", "security check", "is <app> safe/ready to launch", "harden <app>", "run the security checklist", "pre-launch check", "launch checklist", "pre-app check", "app doctor", or before launching any app/feature touching auth, payments, uploads, or AI. Stack-portable — deepest on Supabase + Vercel + Stripe.
 ---
 
-# Security Doctor
+# App Doctor (Security Doctor + Pre-App Checklist)
 
 **What it does, in one loop:** point it at an app → it runs the checklist, verifying each item **in the code and against the live app** → it produces a **scored report of exactly what's missing and the fix for each gap** → it **implements the fixes** (small ones in the same pass; big/destructive ones proposed first).
 
@@ -17,6 +17,7 @@ Built to be reusable across any app. The knowledge is generalized from real prod
 - `references/fix-templates.md` — 12 copy-paste-and-adapt fixes (SQL + JS), each with pitfalls and the failure mode it closes.
 - `references/tooling.md` — the **scanner layer** (domain 9): Semgrep, TruffleHog, Nuclei, zizmor, Socket/OSV, promptfoo + audit-firm companion skills. Install + exact command + what class each catches that the manual pass can't. Load when running the automated pass or wiring CI.
 - `references/knowledge-base.md` — the *why* behind every check: the incident class that taught it, grouped by theme. Read a section when a finding is subtle or the user asks why.
+- `references/launch-checklist.md` — the **pre-app / launch-readiness pass** (domains 10–13): legal & compliance (privacy-policy disclosures incl. AI use + named processors, deletion promises, public buckets, testimonials, click-to-cancel, trial reminders, AI self-harm response), auth hardening extras (reset rate-limit, breached-password screening), the 20-minute last-mile polish sweep, and day-one retention (widget, pricing, share paths). Load for any launch/readiness request, or alongside the security pass before a launch.
 
 ## Workflow
 
@@ -39,6 +40,9 @@ Walk the checklist top to bottom. For each item:
 **Run the scanner layer (domain 9 — `tooling.md`).** Alongside the manual checks, run the automated scanners that catch classes the checklist can't: **Semgrep** (SAST on the app's own code), **TruffleHog** `--only-verified` (secrets), **zizmor** (`.github/workflows/`) during the code pass; **Nuclei** (`-tags exposure,misconfiguration`, own/authorized hosts only) during the live pass; **Socket/OSV** at dependency review; **promptfoo** against tool-using LLM routes. Install one-liners + exact commands are in `tooling.md`. Record 0-finding runs as evidence, and confirm each scanner actually ran (a skipped/errored scan looks identical to a clean one). Treat a heuristic scanner's CRITICAL on a *security* skill/tool as a likely false positive — read the code before believing it.
 
 For a large surface, fan out read-only sub-agents by section (DB/RLS, auth, CSP/headers, payments, AI, supply chain, scanner layer) and merge — but you own the merge and the live re-verification.
+
+### 2b. Launch-readiness pass (when the ask is "ready to launch?", a launch is near, or the user asks for the pre-app checklist)
+Load `references/launch-checklist.md` and walk domains 10–13 the same way — verify, don't infer: read the live privacy policy against the actual API hosts in the code; walk the cancel flow as a test subscriber; probe a deleted upload's storage URL; run the polish sweep against the live mobile viewport. Legal items are launch blockers; polish batches into one commit; retention items are recommendations. A pure security ask can skip this pass; a pure launch ask still runs the security spine's critical items (anon probes, privilege escalation) — an app is not "ready" if it's leaking.
 
 ### 3. Report (exactly what's missing + the fix)
 Produce, in the final message:

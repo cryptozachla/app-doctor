@@ -1,6 +1,8 @@
-# 🛡️ Security Doctor
+# 🛡️ App Doctor — Security Doctor + Pre-App Checklist
 
-**A Claude Code / agent skill that audits any web app's security, tells you exactly what's missing with the fix for each gap, and implements the fixes.**
+> Formerly **security-doctor** — the security half is unchanged; a launch-readiness half is new. Old links redirect.
+
+**A Claude Code / agent skill that audits any web app's security AND launch-readiness, tells you exactly what's missing with the fix for each gap, and implements the fixes.**
 
 Most "security checklists" are lists of things to worry about. Security Doctor is different: every one of its 39 checks (33 manual + a 6-tool automated scanner layer) tells the agent **how to detect the gap in your actual codebase** (a grep pattern or a live probe against your running app), **which fix closes it** (one of 12 copy-paste SQL/JS templates), and **how to verify the fix actually landed** — so you get a scored report backed by evidence, not vibes.
 
@@ -28,6 +30,17 @@ Security Doctor was distilled from real production audits into a single reusable
 | **Surface area** | admin gated in middleware, server-side role re-check, strip test scaffolding, CSRF |
 | **Data & visibility** | anon write lockdown, column-level exposure, RLS (no `USING(true)`), `SECURITY DEFINER` RPC revoke, privilege-escalation columns |
 | **Supply chain & CI** | no secrets in git history, dependency scan, security tests wired into CI |
+
+## The launch-readiness pass (domains 10–13)
+
+Security says "can this app be hacked?" — the pre-app checklist asks **"is this app ready to launch?"** Four more domains in [`references/launch-checklist.md`](references/launch-checklist.md), run with the same verify-don't-infer discipline:
+
+- **10 · Legal & compliance** — privacy policy exists and matches reality (data collected, AI use disclosed, third-party processors named), deletion promises actually honored (probe the storage URL), no private data in public buckets, no fabricated testimonials, cancellation as easy as signup, trial auto-renew reminders, AI chat surfaces carry a self-harm/crisis response.
+- **11 · Auth hardening extras** — rate-limited password reset (and a reset flow that doesn't dead-end), breached-password screening, session-storage reviewed as a decision, 2FA proportional to stakes.
+- **12 · Last-mile polish** — the 20-minute sweep: broken links, favicon/OG, titles/meta, custom 404, form success/error states, clickable tel:/mailto:, no horizontal scroll, mobile everything.
+- **13 · Day-one retention & commercial readiness** — glanceable home-screen widget shipping WITH the app, pricing sanity, contextual push prompt, share paths.
+
+Field lessons from real launch passes (absolute legal links across subdomains, the shared-minlength lockout trap, CASCADE-vs-storage orphans, per-add-on click-to-cancel) are at the bottom of the file.
 
 ## The 12 fix templates
 
@@ -94,7 +107,7 @@ It defaults to **report-only** when you're just asking "is this safe?" and imple
 Drop the skill into your agent's skills directory:
 
 ```bash
-git clone https://github.com/<owner>/security-doctor.git ~/.claude/skills/security-doctor
+git clone https://github.com/<owner>/app-doctor.git ~/.claude/skills/app-doctor
 ```
 
 (Works with any harness that loads a `SKILL.md` + `references/` folder. The path above is the Claude Code convention; adjust for your setup.)
@@ -107,6 +120,7 @@ Just ask your agent, in a repo:
 - `harden this app`
 - `is this safe to launch?`
 - `run the security checklist`
+- `is this app ready to launch?` / `run the pre-app checklist`
 
 The skill loads its checklist, runs the loop above, and hands you the scored report.
 
@@ -119,6 +133,7 @@ references/
   tooling.md                  # the scanner layer — Semgrep, TruffleHog, Nuclei, zizmor, Socket, promptfoo
   fix-templates.md            # 12 copy-paste-and-adapt SQL/JS fixes, with pitfalls
   knowledge-base.md           # the "why" behind every check, grouped by theme
+  launch-checklist.md         # the pre-app / launch-readiness pass (domains 10-13)
 security-doctor-map.png       # one-page visual of the whole skill
 ```
 
