@@ -8,7 +8,7 @@ Most "security checklists" are lists of things to worry about. Security Doctor i
 
 It's deepest on the **Supabase + Vercel + Stripe** stack (where a browser-shipped anon key makes every database permission a public one), but the underlying laws are stack-portable.
 
-![What Security Doctor does](security-doctor-map.png)
+![What App Doctor does](app-doctor-map.png)
 
 ---
 
@@ -134,7 +134,7 @@ references/
   fix-templates.md            # 12 copy-paste-and-adapt SQL/JS fixes, with pitfalls
   knowledge-base.md           # the "why" behind every check, grouped by theme
   launch-checklist.md         # the pre-app / launch-readiness pass (domains 10-13)
-security-doctor-map.png       # one-page visual of the whole skill
+app-doctor-map.png            # one-page visual of the whole skill
 ```
 
 ## Scope & honesty
