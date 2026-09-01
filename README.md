@@ -42,6 +42,10 @@ Security says "can this app be hacked?" — the pre-app checklist asks **"is thi
 
 Field lessons from real launch passes (absolute legal links across subdomains, the shared-minlength lockout trap, CASCADE-vs-storage orphans, per-add-on click-to-cancel) are at the bottom of the file.
 
+## The App Doctor Score
+
+Every audit ends with **one number out of 100** — how much was already set up before the audit walked in. 74 checks, weighted: 🔴 criticals (exploitable-now / sue-now) are 5 points, 🟡 important hardening is 3, 🟢 polish is 1; N/A items (no payments, no AI) leave the denominator so they never count against you. Two honesty caps keep the number from flattering: any open security critical caps the score at **49**, an open legal blocker caps it at **69** — an app leaking data doesn't get to score 80 on neatness. 90+ means you barely needed the audit; below 50 means the fix pass is the point.
+
 ## The 12 fix templates
 
 Copy-paste-and-adapt SQL + JS, each with its pitfalls:

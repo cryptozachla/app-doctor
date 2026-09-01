@@ -47,6 +47,23 @@ Load `references/launch-checklist.md` and walk domains 10–13 the same way — 
 ### 3. Report (exactly what's missing + the fix)
 Produce, in the final message:
 1. **Scored table** — `item · status · evidence`.
+1b. **The App Doctor Score — one number out of 100, always.** The score answers "how much of this was already set up before we walked in?" — an app that had nearly everything done scores high and hears so plainly; an app with a handful of greens scores low.
+
+   **Weights (74 checks, 210 possible points):**
+   - 🔴 **Critical — 5 pts each (14 items):** security #11 webhook signatures, #12 prices server-side, #13 prompt-injection fencing, #19 admin routes gated, #20 server-side admin re-check, #24 anon write lockdown, #25 column exposure, #26 RLS, #27 DEFINER RPC exposure, #28 escalation columns, #31 secrets in git; launch L1 privacy policy exists, L5 deletion honored, L6 no private data in public buckets. These are the exploitable-now / sue-now items.
+   - 🟡 **Important — 3 pts each (40 items):** every other security item #1–33, the 6 scanner checks #34–39, launch L2–L4 + L7–L10, and A1–A5.
+   - 🟢 **Polish — 1 pt each (20 items):** the domain-12 polish sweep (16) + domain-13 retention (4).
+
+   **Formula:** `score = round(100 × points earned ÷ points applicable)`. ✅ = full points, ⚠️ = half, ❌ = zero. ⏭️ N/A items leave the denominator entirely — but N/A means *structurally inapplicable* (no payments → #11–12 out; no AI → #13, L10, #39 out), never "didn't get to it." A scoped audit scores only the domains actually walked and says so next to the number.
+
+   **Honesty caps (the number must not flatter):**
+   - Any open 🔴 security critical → score is **capped at 49**, whatever the arithmetic says.
+   - No security criticals but an open 🔴 legal blocker (L1/L5/L6) → **capped at 69**.
+   - When a cap bites, show both: `Score: 49 (capped — underlying 78) — 1 critical open`.
+
+   **Bands:** **90–100** launch-ready, gaps are polish — tell them they barely needed the audit. **75–89** nearly there — one focused day closes it. **50–74** real gaps — the fix pass is the value. **≤49** not safe / not ready — criticals first, everything else after.
+
+   Print it as the first line of the report: `🩺 App Doctor Score: NN/100 — <band> (NNN/NNN pts across NN applicable checks)`.
 2. **Gap list in priority order** — unauthenticated privilege-escalation and live data leaks first, then auth/payment, then hardening. For each gap: one line on the risk, and the concrete fix (point at the fix-template number and paste the adapted SQL/code).
 3. **The fix plan** — which gaps you'll implement now vs. which need a decision.
 
