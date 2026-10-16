@@ -1,8 +1,10 @@
 # Security Doctor — Fix Templates
 
-Copy-paste-and-adapt fixes, generalized from real production security audits (Supabase/PostgREST + Vercel + Stripe). Placeholders: `<app>` table prefix, `<table>`, `<PROJECT>.supabase.co`, `<PUBLISHABLE_KEY>`, `<domain>`.
+Copy-paste-and-adapt fixes, extracted from live production audits (Supabase/PostgREST + Vercel + Stripe). Placeholders: `<app>` table prefix, `<table>`, `<PROJECT>.supabase.co`, `<PUBLISHABLE_KEY>`, `<domain>`.
 
 **The law governing almost every template:** the publishable/anon key ships in client JS, so **every permission the `anon` role holds is granted to the entire internet.** A missing GRANT fails closed; a missing RLS policy fails open — the grant is the load-bearing layer, RLS is defense-in-depth. **Verify, never infer** — a finding is real only when a live probe with the public key returned the denial code, not when code "looks admin-only."
+
+Notes on the reference code: the fixes below name illustrative file paths (e.g. `api/auth-event.js`, `api/_mfa.js`, `middleware.js`, a `cron-error-ping.js`, a `<app>_aal_ok` SQL helper, a `js/dispatch.js` handler module) — map each to your own app's equivalent. Where a fix spans SQL + client, both pieces are shown.
 
 ---
 
@@ -35,7 +37,7 @@ END $$;
 GRANT INSERT ON public.<app>_page_visits TO anon;   -- e.g. analytics on every load
 ```
 
-Pitfalls: don't `GRANT ... ON ALL SEQUENCES TO anon` "to be safe" — it widens access inside a narrowing migration; grant one sequence by name only if an insert later 42501s on it. INSERT-escalation trap: revoke `INSERT (is_admin)` before table INSERT (see T6).
+Pitfalls: don't `GRANT ... ON ALL SEQUENCES TO anon` "to be safe" — it widens access inside a narrowing migration; grant one sequence by name only if an insert later 42501s on it. INSERT-escalation trap: revoke `INSERT (is_admin)` before table INSERT (see T6). Ref: `a production reference`, `a production reference`.
 
 ---
 
@@ -54,8 +56,8 @@ Everything below LOOKS like a permission result and is NOT: `200/204` on a `{}` 
 **Two anti-patterns that make the harness silently green:** (1) a test that skips itself when unconfigured — default the URL + publishable key IN the file (it's public), assert config present + host answered. (2) probe reachability at module load with **top-level await**, not `before()` — `node:test` evaluates `skip:` at registration before hooks run.
 
 ```js
-const URL = process.env.APP_SUPABASE_URL || 'https://<PROJECT>.supabase.co';
-const KEY = process.env.APP_SUPABASE_ANON_KEY || 'sb_publishable_...'; // public by design
+const URL = process.env.WS_SUPABASE_URL || 'https://<PROJECT>.supabase.co';
+const KEY = process.env.WS_SUPABASE_ANON_KEY || 'sb_publishable_...'; // public by design
 const H = { apikey:KEY, Authorization:`Bearer ${KEY}`, 'Content-Type':'application/json' };
 const reachable = await (async () => {
   try { return (await fetch(`${URL}/rest/v1/<app>_spots?select=id&limit=1`,{headers:H})).status < 500; }
@@ -79,7 +81,7 @@ test('public spot list still populates', { skip: !reachable }, async () => {
   assert.equal(r.status, 200);
 });
 ```
-Gate stage-dependent blocks on an `APPLIED = {stage1:true,...}` map, and flip to FAIL if an un-applied stage unexpectedly passes (a stale `false` stops verifying that stage). Companion no-network **source-text ratchet**: scan the client bundle so every `.select()`/`.update()` on a column-restricted table names only allowed columns, with a `DEBT[]` allowlist that's prune-or-fail. `probe inserts WITHOUT Prefer: return=representation` (it SELECTs the row back → rolls back on insert-only tables → false "blocked").
+Gate stage-dependent blocks on an `APPLIED = {stage1:true,...}` map, and flip to FAIL if an un-applied stage unexpectedly passes (a stale `false` stops verifying that stage). Companion no-network **source-text ratchet**: scan the client bundle so every `.select()`/`.update()` on a column-restricted table names only allowed columns, with a `DEBT[]` allowlist that's prune-or-fail. `probe inserts WITHOUT Prefer: return=representation` (it SELECTs the row back → rolls back on insert-only tables → false "blocked"). Ref: `a production reference`, `a production reference`.
 
 ---
 
@@ -93,7 +95,7 @@ REVOKE SELECT (staleness_ping_token) ON public.<app>_spots FROM anon;
 REVOKE SELECT ON public.<app>_spots FROM anon;
 GRANT  SELECT (id, name, address, lat, lng /* public cols only */) ON public.<app>_spots TO anon;
 ```
-The caveat that WILL break your app: once a column is revoked, anon `select('*')` on that table **fails entirely** (Postgres denies the whole statement) — and a named select whose fallback is `select('*')` turns one forbidden column into zero rows. **Grep for `select('*')` and named selects of the column on signed-out paths BEFORE revoking, deploy the client fix first.** Signed-in paths run as `authenticated`, unaffected. Probe every column individually (`select=*` returns 42501 whenever ANY column is revoked — hid 134 readable columns for months).
+The caveat that WILL break your app: once a column is revoked, anon `select('*')` on that table **fails entirely** (Postgres denies the whole statement) — and a named select whose fallback is `select('*')` turns one forbidden column into zero rows. **Grep for `select('*')` and named selects of the column on signed-out paths BEFORE revoking, deploy the client fix first.** Signed-in paths run as `authenticated`, unaffected. Probe every column individually (`select=*` returns 42501 whenever ANY column is revoked — hid 134 readable columns for months). Ref: `a production reference`.
 
 ---
 
@@ -122,6 +124,7 @@ ALTER TABLE public.<app>_mfa_backup_codes ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.<app>_mfa_backup_codes FROM anon, authenticated, public;
 REVOKE ALL ON SEQUENCE public.<app>_mfa_backup_codes_id_seq FROM anon, authenticated, public;
 ```
+Ref: `a production reference`, `a production reference`.
 
 ---
 
@@ -155,13 +158,13 @@ GRANT  EXECUTE ON FUNCTION public.<app>_admin_set_ban(uuid,boolean) TO authentic
 ```sql
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM anon;
 ```
-Also revoke EXECUTE on pre-existing state-changing functions (`mark_verified`, rollover jobs, `promote_admin`) from `public, anon`. **Pin `search_path`** on every DEFINER function (else a caller who can create objects on an earlier schema shadows a table name).
+Also revoke EXECUTE on pre-existing state-changing functions (`mark_verified`, rollover jobs, `promote_admin`) from `public, anon`. **Pin `search_path`** on every DEFINER function (else a caller who can create objects on an earlier schema shadows a table name). Ref: `a production reference`, `a production reference`.
 
 ---
 
 ## 6. Privileged-column guard trigger + safe admin promotion (transaction-local suppression)
 
-Closes: even a stolen service-role key shouldn't mint an admin. A `BEFORE UPDATE` trigger rejects any change to privileged columns (`is_admin`, `is_banned`, `warning_count`, `points`) — but then there's no supported way to add an admin. This restores promotion **without touching the guard** and **without re-opening it for anyone else.** (This is the pattern in the a production app STAGE 8 file.)
+Closes: even a stolen service-role key shouldn't mint an admin. A `BEFORE UPDATE` trigger rejects any change to privileged columns (`is_admin`, `is_banned`, `warning_count`, `points`) — but then there's no supported way to add an admin. This restores promotion **without touching the guard** and **without re-opening it for anyone else.** (The pattern lives in a dedicated "restore admin promotion" migration.)
 ```sql
 CREATE OR REPLACE FUNCTION public.<app>_set_admin(target_email text, make_admin boolean DEFAULT true)
   RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path=public, pg_temp
@@ -183,7 +186,7 @@ END; $$;
 REVOKE EXECUTE ON FUNCTION public.<app>_set_admin(text,boolean) FROM public, anon;
 GRANT  EXECUTE ON FUNCTION public.<app>_set_admin(text,boolean) TO authenticated;
 ```
-The `true` third arg is the whole safety mechanism — a global (`false`) set leaves the guard off for concurrent statements. Verify it reverted: as service role, a raw `PATCH is_admin` must STILL hit the guard (P0001) after this runs. Don't try to "teach the guard to allow a flagged update" if its body isn't in your repo (dump with `SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname='<guard_fn>';`) — you'll silently drop protection you didn't guess.
+The `true` third arg is the whole safety mechanism — a global (`false`) set leaves the guard off for concurrent statements. Verify it reverted: as service role, a raw `PATCH is_admin` must STILL hit the guard (P0001) after this runs. Don't try to "teach the guard to allow a flagged update" if its body isn't in your repo (dump with `SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname='<guard_fn>';`) — you'll silently drop protection you didn't guess. Ref: `a production reference`.
 
 ---
 
@@ -236,7 +239,7 @@ CREATE TABLE IF NOT EXISTS <app>_security_events (
   created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS <app>_security_events_lookup ON <app>_security_events (kind, email, created_at DESC);
 ```
-Counter MUST be in the DB (every serverless invocation is a fresh process). **Fail open** (opposite of MFA gate) — a login-guard outage locking out legit users is the worse failure. Alert fingerprint stable per email+day (keep count out of the message).
+Counter MUST be in the DB (every serverless invocation is a fresh process). **Fail open** (opposite of MFA gate) — a login-guard outage locking out legit users is the worse failure. Alert fingerprint stable per email+day (keep count out of the message). Ref: `api/auth-event.js`.
 
 ---
 
@@ -274,7 +277,7 @@ CREATE OR REPLACE FUNCTION public.<app>_aal_ok() RETURNS boolean
 AS $$ SELECT (coalesce(current_setting('request.jwt.claims',true)::jsonb->>'aal','aal1')='aal2')
           OR NOT EXISTS (SELECT 1 FROM auth.mfa_factors WHERE user_id=auth.uid() AND status='verified'); $$;
 ```
-**Fail closed** (opposite of the login guard) — if factor state can't be determined, refuse. Rule is conditional: *if you enrolled a factor you must have used it; if not, nothing changes* — safe to deploy before anyone enables 2FA. **Do NOT gate the whoami/identity endpoint** (it's the call that tells the panel you're an admin, which must precede the challenge) — gating it = permanent lockout.
+**Fail closed** (opposite of the login guard) — if factor state can't be determined, refuse. Rule is conditional: *if you enrolled a factor you must have used it; if not, nothing changes* — safe to deploy before anyone enables 2FA. **Do NOT gate the whoami/identity endpoint** (it's the call that tells the panel you're an admin, which must precede the challenge) — gating it = permanent lockout. Ref: `api/_mfa.js`, `a production reference`.
 
 ---
 
@@ -296,7 +299,7 @@ Closes: an inbound email/message body (attacker-controlled) fed to an LLM. Three
    // user turn wraps the body in the SAME delimiters and truncates:
    { role:'user', content:`<<<CUSTOMER_EMAIL>>>\n${(bodyText||'').slice(0,6000)}\n<<<END_CUSTOMER_EMAIL>>>` }
    ```
-3. **Constrain the output** — `response_format:{type:'json_object'}`, a fixed closed intent vocabulary validated against an allowlist (unknown → `'other'`), and **human-in-the-loop by default** (draft → approve/edit/deny). Never let the LLM's output directly trigger a money/credential/policy action — the worst it can do is draft. Truncate untrusted input; escape (`&<>`) before any HTML sink.
+3. **Constrain the output** — `response_format:{type:'json_object'}`, a fixed closed intent vocabulary validated against an allowlist (unknown → `'other'`), and **human-in-the-loop by default** (draft → approve/edit/deny). Never let the LLM's output directly trigger a money/credential/policy action — the worst it can do is draft. Truncate untrusted input; escape (`&<>`) before any HTML sink. Ref: `api/inbound-email.js`.
 
 ---
 
@@ -340,7 +343,7 @@ connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.
 frame-src 'self' https://js.stripe.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
 object-src 'none'; report-uri /api/csp-report; report-to csp
 ```
-Pitfalls: `X-Frame-Options: DENY` breaks your own app if any page iframes another — use `SAMEORIGIN` (or `frame-ancestors` for finer control). Need `media-src` explicitly or `<audio>`/`<video>` die silently; `worker-src 'self' blob:` for MapLibre/service workers. When handlers move from inline HTML to `js/`, repoint source-scanner file-lists or they match nothing.
+Pitfalls: `X-Frame-Options: DENY` breaks your own app if any page iframes another — use `SAMEORIGIN` (or `frame-ancestors` for finer control). Need `media-src` explicitly or `<audio>`/`<video>` die silently; `worker-src 'self' blob:` for MapLibre/service workers. When handlers move from inline HTML to `js/`, repoint source-scanner file-lists or they match nothing. Ref: `a production reference`, `a production reference`, both `vercel.json`.
 
 ---
 
@@ -368,15 +371,232 @@ export default function middleware(req) {
   // self-redirect so PWAs / WebViews / service-worker requests carry it after.
 }
 ```
-Must be middleware not `vercel.json` rewrites. Runtime-referenced assets on the admin host must be exempted individually or they get rewritten to panel HTML and fail with "Unexpected token <". Cron/webhook routes bypass any gate on all hosts. **Normalize the pathname** (iterative-decode, fold backslashes, collapse slashes, strip trailing slash, lowercase) or `/admin.html/` and `/%2fadmin.html` both serve the panel. The real security is the admin login (`is_admin` resolved by `auth_id`, not email) — the host rewrite is obscurity. Test with `tests/middleware-admin-gate.test.mjs`.
+Must be middleware not `vercel.json` rewrites. Runtime-referenced assets on the admin host must be exempted individually or they get rewritten to panel HTML and fail with "Unexpected token <". Cron/webhook routes bypass any gate on all hosts. **Normalize the pathname** (iterative-decode, fold backslashes, collapse slashes, strip trailing slash, lowercase) or `/admin.html/` and `/%2fadmin.html` both serve the panel. The real security is the admin login (`is_admin` resolved by `auth_id`, not email) — the host rewrite is obscurity. Test with `tests/middleware-admin-gate.test.mjs`. Ref: `middleware.js`, `a production reference`.
 
 ---
 
 ## 12. Security-events table + alerting (visibility)
 
-Closes: attacks invisible until someone looks. Route them into the same production alarm pipeline as every other error (structured log → cron ping → Telegram), fingerprinted so one attack = one page. Table: T7's `<app>_security_events`. Fingerprint on a stable string (route + message, email + day), variable data (count) OUT of the message. Alerting is best-effort (try/catch — a failure to alert must never break the guarded action). Public email/money endpoints that must stay open: rate-limit with a DB counter (3/hr per address); a user's own action (monthly report) requires the session token and refuses any recipient but the account's own address.
+Closes: attacks invisible until someone looks. Route them into the same production alarm pipeline as every other error (structured log → cron ping → Telegram), fingerprinted so one attack = one page. Table: T7's `<app>_security_events`. Fingerprint on a stable string (route + message, email + day), variable data (count) OUT of the message. Alerting is best-effort (try/catch — a failure to alert must never break the guarded action). Public email/money endpoints that must stay open: rate-limit with a DB counter (3/hr per address); a user's own action (monthly report) requires the session token and refuses any recipient but the account's own address. Ref: `api/auth-event.js` (`alertBurst`).
 
 ---
+
+## 13. Policy inventory → drop-by-inspection → atomic rewrite (the signed-in-role pass)
+
+Closes: tables anon-locked but wide open to any signed-in account; scoped policies neutered by an open one beside them; a users-table column revoke that would break every policy sub-selecting it. Distilled from a real admin-mimic audit: 9 PII tables plus the users table closed in three migrations, zero rollbacks.
+
+**§A. Grant inventory triad (run before any probe — turns "open?" into a finite list):**
+```sql
+-- A. policies that let signed-in users see/do everything
+select tablename, policyname, cmd, roles from pg_policies
+where schemaname='public' and qual='true' and (roles='{public}' or 'authenticated' = any(roles)) order by 1,3;
+-- B. tables with RLS off (grants alone decide)
+select c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace
+where n.nspname='public' and c.relkind='r' and not c.relrowsecurity order by 1;
+-- C. table-level grants held by the client roles (the column-revoke trap lives here)
+select grantee, table_name, string_agg(privilege_type, ',' order by privilege_type) from information_schema.role_table_grants
+where table_schema='public' and grantee in ('anon','authenticated') group by 1,2 order by 1,2;
+```
+Then probe **as a signed-in non-admin**, and for every table that returns rows, verify ownership of each row with the service key (own row / owner-of-claim / staff-of-claim) before calling it a leak.
+
+**§B. Drop open SELECT policies by inspection, never by name** (permissive policies OR together — one `USING (true)` defeats every scoped one). Refuse to run on a table with RLS off (enabling RLS blind needs write policies too), warn on non-SELECT open policies instead of touching them:
+```sql
+do $$ declare p record; begin
+  for p in select policyname, tablename from pg_policies
+           where schemaname='public' and tablename = any(array['<t1>','<t2>']) and cmd='SELECT' and qual='true' loop
+    execute format('drop policy %I on public.%I', p.policyname, p.tablename);
+  end loop;
+  for p in select policyname, tablename, cmd from pg_policies
+           where schemaname='public' and tablename = any(array['<t1>','<t2>']) and cmd<>'SELECT' and qual='true' loop
+    raise warning 'STILL OPEN for %: "%" on % — reads scoped, this write policy is not', p.cmd, p.policyname, p.tablename;
+  end loop;
+end $$;
+-- then one scoped SELECT policy per table, keyed on the DEFINER helpers:
+create policy <t>_read_scoped on public.<t> for select to authenticated
+  using (requester_user_id = public.<app>_me()
+      or vendor_claim_id in (select id from public.<app>_vendor_claims where user_id = public.<app>_me())
+      or public.<app>_is_admin());
+```
+`<app>_me()` = `select id from <app>_users where auth_id = auth.uid()` (DEFINER, STABLE) — because **the app's user id is not `auth.uid()`** when the users table has its own `id`; a policy comparing an app-id column to `auth.uid()` matches nothing and is why the open policy was there in the first place.
+
+**§C. Users-table column revoke — inventory, rewrite, revoke, all-or-nothing.** Policy expressions run with the caller's privileges, so revoking `email`/`is_admin` from `authenticated` breaks every OTHER table whose policy sub-selects them (dm threads, orders, addresses… all dead). Inventory first:
+```sql
+select tablename, policyname, cmd, qual, with_check from pg_policies
+where schemaname='public' and (coalesce(qual,'') ilike '%<app>_users%' or coalesce(with_check,'') ilike '%<app>_users%');
+select p.proname, p.prosecdef from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_language l on l.oid=p.prolang
+where n.nspname='public' and p.prokind='f' and l.lanname in ('sql','plpgsql') and p.prosrc ilike '%<app>_users%';  -- non-definer = will break
+```
+Then ONE `DO` block: loop those policies, `regexp_replace` the deparsed shapes (`EXISTS (SELECT 1 FROM <users> cu WHERE cu.auth_id = auth.uid() AND cu.is_admin)` → `<app>_is_admin()`; `( SELECT <users>.id FROM <users> WHERE auth_id = auth.uid())` → `(<app>_me())`; the `banned` and `lower(email) = lower(auth.jwt()->>'email')` variants likewise), `ALTER POLICY … USING (…) WITH CHECK (…)` each one, `RAISE EXCEPTION` if any still mentions the table (→ whole block rolls back, nothing half-applied), and only then revoke. Dry-run the regexes against every deparsed shape from the inventory before running. Hand-rewrite the odd one out (a JOIN-shaped policy) with a plain `ALTER POLICY` *before* the block. Then — **REVOKE the TABLE grant and GRANT the column list** (a column REVOKE alone is a silent no-op; §T3), keeping the own-row read alive through a DEFINER `my_profile()` RPC the client already ships with a fallback. Ref: `a production reference`, `[C] 2026-09-14 Admin Mimic 4`.
+
+**§D. Cross-user reads hiding inside features.** After scoping, grep the client for queries on the scoped tables that filter on a non-own column — `.contains('giftcards', …)` to check reuse, `.eq('email', …)` to find a user, "username taken" checks. They now return empty and the feature silently degrades. Move each to a server route (service role) or a narrow DEFINER RPC (`user_by_email(p_email)` returning id+username only).
+
+---
+
+## 14. Membership tables (staff / team / collaborator rows are escalation columns)
+
+Closes: any signed-in user inserting `{claim_id: X, email: me}` into a staff table and inheriting the vendor's orders through an `is_staff_for()` policy.
+```sql
+do $$ declare p record; begin  -- start clean; policies OR together
+  for p in select policyname from pg_policies where schemaname='public' and tablename='<app>_staff_members' loop
+    execute format('drop policy %I on public.<app>_staff_members', p.policyname); end loop; end $$;
+create policy staff_read on public.<app>_staff_members for select to authenticated
+  using (lower(email) = lower(coalesce(auth.jwt()->>'email',''))          -- the staffer
+      or claim_id in (select id from public.<app>_vendor_claims where user_id = public.<app>_me())   -- the owner
+      or public.<app>_is_admin());
+create policy staff_insert on public.<app>_staff_members for insert to authenticated
+  with check (claim_id in (select id from public.<app>_vendor_claims where user_id = public.<app>_me()) or public.<app>_is_admin());
+-- update/delete: same USING as insert's WITH CHECK. Never `WITH CHECK (true)`, never "email = mine".
+```
+Same shape for drivers, delegates, org members. Probe: as a non-owner, an inert INSERT with a constraint-violating payload (dup primary key) → `42501`/RLS = closed, `23505` = the grant+policy let it through.
+
+---
+
+## 15. Business-logic hardening (server-derived money, idempotency, atomic redemption)
+Closes money-abuse (#40–#43, #46). Postgres/Node flavor; the LAWS are stack-portable. A reference sketch — the comments and pitfalls mark what a copier MUST still implement.
+
+**A. The server owns every amount; persist an immutable priced quote.** Money math in the DB (`numeric`/`bigint` **minor units** — never JS floats; cast before multiplying so `bigint * int` can't overflow), one currency, and **freeze per-line snapshots** so fulfillment reads the order, never a live price. **Reject** an invalid or unresolved line — never silently drop it — and cap the *summed* quantity so duplicate lines can't stack past the limit.
+```sql
+with raw as (                                   -- EVERY input line, unfiltered
+  select product_id, qty from jsonb_to_recordset($2) as l(product_id bigint, qty int)
+), req as (
+  select product_id, sum(qty) as qty from raw group by product_id   -- dup lines merge; no narrowing
+), priced as (
+  select r.product_id, r.qty, p.price_minor, p.currency,
+         r.qty::numeric * p.price_minor as line_minor               -- numeric: no overflow
+  from req r join products p on p.id = r.product_id and p.active
+)
+insert into order_lines (order_id, product_id, qty, unit_minor, line_minor, currency)
+select $1, product_id, qty, price_minor, line_minor, currency from priced;
+-- same tx, else ROLLBACK (reject, don't filter):
+--   (select count(*) from raw) > 0            -- nonempty cart
+--   and not exists (select 1 from raw where product_id is null or qty is null or qty not between 1 and 10000)  -- NULL-safe reject
+--   and (select max(qty) from req) <= 10000           -- cap the SUMMED qty (dups can't stack past it)
+--   and (select count(*) from priced) = (select count(*) from req)  -- every product resolved + active
+--   and (select count(distinct currency) from priced) = 1           -- single currency
+-- order.total_minor = sum(order_lines.line_minor), validated <= a sane ceiling. Charge + fulfill from these rows.
+```
+
+**B. One-time actions need a NATURAL unique key, not just an idempotency key.** A client idempotency key only dedupes transport retries — an attacker replays the action with a *fresh* key. Add a server-derived business key too. Every key column `NOT NULL` (Postgres counts NULLs as distinct, so a NULL slips past the index), and name the conflict target so an unrelated constraint isn't silently swallowed.
+```sql
+create unique index on redemptions (user_id, reward_id);         -- the one-time invariant (replay-proof)
+create unique index on redemptions (user_id, action, idem_key);  -- transport-retry dedup
+alter table redemptions alter column idem_key set not null;
+```
+```js
+// the effect, the idempotency row, and the ledger entry commit in ONE transaction —
+// a crash between a committed key and an ungranted effect either double-grants or poisons the key.
+const r = await tx.oneOrNone(
+  `insert into redemptions (user_id, reward_id, action, idem_key, status)
+   values ($1,$2,'claim_reward',$3,'done')
+   on conflict (user_id, reward_id) do nothing returning id`, [uid, rewardId, idemKey]);
+if (!r) return replayStoredResult(uid, rewardId);  // matching retry: replay the ORIGINAL result, don't re-grant
+// ... grant the value + write the ledger row in the SAME tx ...
+```
+A matching retry replays the stored status/result; reuse of a key with a *different* payload is rejected, not reported as success.
+
+**C. Atomic conditional mutation — positive guard, currency scope, per-user redemption.** A missing `amount > 0` lets a negative amount MINT value (`balance - (-100)` adds 100). Scope the wallet by currency; make per-user coupon eligibility replay-proof with a UNIQUE redemption row. Every conditional debit/redemption commits in ONE transaction with its order/entitlement (plus a transactional-outbox row if other systems must learn of it) — never copied as a standalone mutation.
+```sql
+alter table wallets add constraint bal_nonneg check (balance_minor >= 0);  -- one currency per wallet row, both NOT NULL
+update wallets set balance_minor = balance_minor - $2
+  where user_id = $1 and currency = $3 and $2 > 0 and balance_minor >= $2
+  returning balance_minor;                         -- 0 rows = insufficient / invalid
+insert into coupon_redemptions (coupon_id, tenant_id, user_id) values ($4,$5,$1);  -- UNIQUE(coupon_id,user_id) = replay-proof
+update coupons set remaining = remaining - 1
+  where id = $4 and tenant_id = $5 and remaining > 0 and now() < expires_at
+  returning id;                                    -- 0 rows → ROLLBACK the whole tx
+```
+
+**D. Refunds/payouts: a durable, idempotent reservation on the payment row.** Aggregating child refunds under `for update` is stale at `READ COMMITTED`; a bare increment double-reserves on retry. Reserve capacity **only for a newly-inserted op**, in one statement, and read back whether both halves happened.
+```sql
+with ins as (
+  insert into refund_ops (id, payment_id, amount_minor, provider_key, status)
+  values ($1,$2,$3,$4,'reserved') on conflict (id) do nothing
+  returning payment_id, amount_minor
+), res as (
+  update payments p set refunded_minor = p.refunded_minor + ins.amount_minor
+  from ins
+  where p.id = ins.payment_id and ins.amount_minor > 0 and p.currency = $5
+    and p.captured_minor - p.refunded_minor >= ins.amount_minor   -- SETTLED captured base
+  returning p.id
+)
+select (select count(*) from ins) as inserted, (select count(*) from res) as reserved;
+```
+Disposition, in the SAME tx: `inserted=0` → retry of an existing op → **replay its stored status, touch nothing**; `inserted=1, reserved=1` → new reservation → commit, then call the PSP with `provider_key`; `inserted=1, reserved=0` → over-refund / wrong currency on a NEW op → **ROLLBACK** so the op row never persists falsely `reserved`. Back the payment row with `check (refunded_minor between 0 and captured_minor)`. **Release/finalize must itself be idempotent** — transition the op out of `reserved` and move capacity only from the winning transition, so a duplicate failure callback can't release twice (which would drive `refunded_minor` negative and re-open capacity):
+```sql
+with done as (                                 -- only the still-'reserved' row wins
+  update refund_ops set status = 'failed'
+  where id = $1 and status = 'reserved' returning payment_id, amount_minor
+)
+update payments p set refunded_minor = p.refunded_minor - done.amount_minor
+from done where p.id = done.payment_id;        -- 0 rows if already released (duplicate callback) → no double-release
+```
+ **Only an authoritative terminal rejection releases** — keep timeout / unknown / pending outcomes `reserved`, authenticate provider callbacks, and retry or reconcile with the same `provider_key` (a lost response may mean the refund actually succeeded, and releasing it would re-open capacity for a later over-refund). Never hold the DB transaction open across the PSP call. Payouts/withdrawals also need destination-ownership checks + a status state machine the refund sketch omits.
+
+Pitfalls: **state your isolation level** — the conditional-UPDATE pattern relies on `READ COMMITTED` re-reading the row after a lock wait; under stricter levels **retry the whole transaction on serialization/deadlock errors**. Concurrency bugs only appear under **parallel** requests ([T2] must fire `Promise.all`, not a serial loop) — and the correct assertion is the **conserved invariant** (final balance ≥ 0; successes = `min(requests, capacity)`), not "exactly one won" (true only for a one-use resource initialized to 1). Centralize every money mutation in one guarded function/RPC and revoke direct write grants from other paths, or an admin tool / webhook / job bypasses all of the above.
+
+## 16. Tenant / entitlement scope guard (the logic RLS can't see)
+Every privileged / service-role route resolves ONE canonical tenant **scalar** from the trusted session (as in [T5]) and **scopes it inside every query** — reads, writes, joins, aggregates, exports — rather than fetching rows and post-filtering (post-filtering pulls other tenants' rows into privileged memory, logs, and traces first). RLS ([T4]) covers only direct reads made with the user's JWT; a service-role route, aggregate, export, or job runs RLS-exempt.
+```js
+const tenantId = requireTenant(caller);   // a validated SCALAR; reject missing/invalid BEFORE querying —
+                                           // undefined === undefined fails OPEN. tenant_id is NOT NULL + FK on every owned table.
+// single + batch: scope in SQL, zero-row-safe, reveal nothing about foreign rows
+const want = [...new Set(ids)];
+const rows = await db.manyOrNone(
+  'select id from orders where tenant_id = $1 and id = any($2)', [tenantId, want]);
+if (rows.length !== want.length) throw http(404);   // absent AND foreign ids are indistinguishable → one 404
+// mutations: predicate in the WRITE (read-then-write is TOCTOU), and CHECK the rowcount
+const w = await db.result('update orders set ... where id = $1 and tenant_id = $2', [id, tenantId]);
+if (w.rowCount !== 1) throw http(404);              // foreign/absent changed nothing → 404, no downstream effects
+```
+```js
+// entitlement: reserve atomically on a locked quota row, positive guard, in the create's tx
+const q = await tx.oneOrNone(
+  `update tenant_quota set seats_used = seats_used + $2
+     where tenant_id = $1 and $2 > 0 and seats_used + $2 <= seat_limit returning seats_used`, [tenantId, n]);
+if (!q) throw http(402, 'seat limit');   // n derived from the ACTUAL create batch; CHECK (seats_used between 0 and seat_limit); release on delete
+const plan = await planOf(tenantId);               // the authoritative plan for THIS tenant
+if (plan?.features?.export !== true) throw http(403);  // "false"/undefined are not true → fail closed
+```
+Pitfalls: tenant match is **not** object authorization — a private/restricted object needs its own ACL on top. Nested references leak: enforce composite FKs `(tenant_id, parent_id)` so a tenant-owned order can't point at another tenant's customer/file. A 404 is only opaque when the SQL scope, zero-row path, body, and timing are identical for absent vs foreign (`db.many` that throws on zero rows splits the paths — use `manyOrNone`). **Export artifacts live outside the query boundary** — tenant-namespace every generated file / storage key and re-authorize both signed-URL issuance and delivery; scoping the query protects the contents, not the download. Jobs/webhooks have **no HTTP caller** — verify the webhook signature, map provider ids through a local tenant mapping, and re-scope + re-authorize when the job runs. Validate plan types strictly and evaluate expiry/trial against **DB time**; reserve metered usage in a tenant/feature/period row the same way as seats. Centralize authz + quota at the one domain/DB mutation boundary (GraphQL resolvers, internal services, workers, admin tools all bypass a per-route check), and put tenant + an authz version in every private cache key.
+
+## 17. SSRF / outbound-fetch guard (validate before you connect)
+Every server-side fetch of a client-influenced URL goes through one guard. Node flavor; same shape in any language.
+```js
+const dns = require('node:dns').promises;
+const ALLOW_HOSTS = new Set(['api.partner.example']);          // allowlist beats denylist
+const isPrivate = ip =>
+     /^(127\.|10\.|169\.254\.|192\.168\.|::1|fe80:|fc|fd)/i.test(ip)
+  || /^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+async function safeFetch(rawUrl) {
+  const u = new URL(rawUrl);
+  if (!['http:', 'https:'].includes(u.protocol)) throw httpErr(400);
+  if (ALLOW_HOSTS.size && !ALLOW_HOSTS.has(u.hostname)) throw httpErr(400);
+  const { address } = await dns.lookup(u.hostname);            // resolve ONCE
+  if (isPrivate(address)) throw httpErr(400);
+  return fetch(u, { redirect: 'error', lookup: () => address }); // no redirects; connect the pinned IP
+}
+```
+Pitfalls: a denylist of hostnames is bypassed by an IP literal, an encoded host, or a name that resolves to a private IP — allowlist hosts AND block private IPs after resolving. `redirect:'follow'` re-opens the hole (a 302 → `169.254.169.254`); use `redirect:'error'` or re-run the guard per hop. **DNS rebinding:** connect to the SAME resolved IP you validated (don't resolve twice). Never hand the upstream body/headers straight back to the client.
+
+## 18. Safe redirects + external-auth callback hardening
+**Redirects (#48):** relative paths only, or an allowlisted host.
+```js
+function safeRedirect(target, fallback = '/') {
+  if (typeof target !== 'string') return fallback;
+  if (target.startsWith('/') && !target.startsWith('//')) return target; // //host is protocol-relative = offsite
+  try { if (ALLOW_HOSTS.has(new URL(target).hostname)) return target; } catch {}
+  return fallback;
+}
+```
+**OAuth/OIDC callback (#51):** verify `state` (or PKCE), exact-match `redirect_uri`, verify the token before trusting it.
+```js
+// start:    state = randomBytes(16).toString('hex'); store in a signed cookie / session
+// callback:
+if (!req.query.state || req.query.state !== session.state) throw httpErr(400); // missing/!= => login CSRF
+const tok = await verifyIdToken(code, { aud: CLIENT_ID, iss: ISSUER });         // checks sig + aud/iss/exp
+if (!tok.email_verified) throw httpErr(400);                                    // don't auto-link unverified email
+```
+Pitfalls: a `redirect_uri` checked by prefix/`startsWith` is bypassable (`https://app.example.evil.com`) — exact-match against a fixed allowlist. A protocol-relative `//evil.com` passes a naive "starts with `/`" test — block `//`. Never trust provider profile fields (email, `email_verified`) without verifying the token signature first.
 
 ## Overall audit order (from the hand-off playbook)
 

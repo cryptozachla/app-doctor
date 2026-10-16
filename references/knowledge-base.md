@@ -1,6 +1,6 @@
 # Security Doctor — Knowledge Base
 
-The distilled, battle-tested lessons behind every check. Each lesson: **principle**, **why** (the incident class that taught it), **detect** (how to find the gap in an arbitrary codebase — grep or live probe), **fix** (concrete pattern). Every pattern here came from a real production audit; adapt it to your own code rather than rebuilding from scratch.
+The distilled, battle-tested lessons behind every check. Each lesson: **principle**, **why** (the incident that taught it), **detect** (how to find the gap in an arbitrary codebase — grep or live probe), **fix** (concrete pattern). Reference implementations point at real code in this workspace (`a production repo`, `a second production repo`) — reuse them, never rebuild.
 
 **Assumed stack:** static/vanilla or Next.js client + Supabase (Postgres / PostgREST / GoTrue) + Vercel serverless `/api` + Stripe, with a browser-shipped **publishable/anon key**. Placeholders: `<app>_*` for table names, `<app>` for the product. Items marked ⚙ are stack-specific — adapt for non-Supabase/non-Vercel targets.
 
@@ -55,6 +55,26 @@ The distilled, battle-tested lessons behind every check. Each lesson: **principl
 
 ---
 
+**`authenticated` is a public role whenever signup is open — audit it exactly like anon.**
+- WHY: months of anon lockdown left 9 tables (orders with phones, catering quotes with emails, every support thread, drivers, appeals) and the users table (24 emails + admin flags) readable by any account — and accounts are free. A probe that only carries the anon key scores all of it green.
+- DETECT: sign in as a throwaway non-admin, run the same per-table / per-column read sweep, then verify ownership of every returned row with the service key (a QA account that is staff on a claim legitimately sees that claim). Grant inventory triad first (T13 §A).
+- FIX: T13 — drop open SELECT policies by inspection, scoped policies on a DEFINER `me()`, then the users-table column grant.
+
+**The app's user id is not `auth.uid()` — a policy comparing them is dead, and a dead policy breeds an open one.**
+- WHY: `users.id` is its own uuid; the auth uid lives in `auth_id`. `support_messages_own` (`t.user_id = auth.uid()`) matched nothing, so support chat broke, so a `USING (true)` policy was added beside it — and permissive policies OR, so the table was open with a "scoped" policy on it.
+- DETECT: `pg_policies` quals comparing an app-id column (`user_id`, `requester_user_id`, `driver_user_id`) to `auth.uid()` on a schema whose users table has `auth_id`. Any table with both a scoped and a `true` policy.
+- FIX: `<app>_me()` DEFINER helper; T13 §B.
+
+**Policy sub-selects run as the caller: a users-table column revoke breaks every table that checks admin inline.**
+- WHY: ~30 policies on 15 tables embedded `EXISTS (SELECT 1 FROM users WHERE auth_id = auth.uid() AND is_admin)`. Revoking `is_admin` from `authenticated` would have thrown "permission denied for table users" on DMs, orders, addresses — for everyone.
+- DETECT: T13 §C inventory (`qual ilike '%users%'`), plus non-DEFINER functions whose body reads the table.
+- FIX: rewrite them all to `is_admin()` / `me()` / `is_banned()` DEFINER helpers in ONE transaction that raises (and rolls back) if any reference survives; revoke only after. A JOIN-shaped policy won't match the regexes — the block names it, you rewrite that one by hand, re-run.
+
+**A column REVOKE against a table-level grant is a silent no-op — and it bit twice.**
+- WHY: `REVOKE SELECT (email, auth_id, is_admin, banned) … FROM authenticated` "succeeded"; the probe still read every email. `authenticated` held table-level SELECT.
+- DETECT: re-probe after every revoke; `information_schema.role_table_grants` for the role/table.
+- FIX: `REVOKE SELECT ON <table>` then `GRANT SELECT (<generated column list minus the hidden ones>)`. Build the list from `information_schema.columns` in a DO block so it can't drift.
+
 ## (b) Privilege Escalation & Admin Gating
 
 **SECURITY DEFINER RPCs are EXECUTABLE by `anon` by default — Postgres grants EXECUTE to PUBLIC.**
@@ -87,6 +107,17 @@ The distilled, battle-tested lessons behind every check. Each lesson: **principl
 **⚙ Non-Supabase equivalent:** the same laws hold anywhere — authorization decisions must key on a server-trusted identity claim (session/JWT sub verified server-side), privileged fields must be non-writable by the client, and every privileged route must re-check server-side. Only the mechanism (grants/RLS) is Postgres-specific.
 
 ---
+
+**The client admin flag is spoofable in one line; what matters is which pages read the DB with the user's own key.**
+- WHY: `currentUser.isAdmin = true` in devtools rendered the in-app Admin dashboard, and its Users / Support / Appeals pages read Supabase directly with the anon key + user JWT — so the spoofer saw real data. The separate admin panel read only via gated `/api` and leaked nothing.
+- DETECT: flip the flag, enumerate every admin page that appears, and for each one grep whether it calls `db.from(...)` or a gated route.
+- FIX: admin pages read through service-role routes (`/api/admin-data` resources); RLS closes the direct path as defence in depth.
+
+**Validate-then-gate leaks the op vocabulary.** Five routes returned `400 Unknown op` to a non-admin before the 403. No data moves, but an outsider learns every valid op name by watching 400 vs 403. Run `mfaGate` + the role lookup before any op/action-name check.
+
+**Membership rows are privilege.** `staff_members` (email + claim_id) feeds an `is_staff_for(claim)` policy that opens that vendor's orders and quotes. If the table's INSERT is self-service, so is vendor data. Owner-or-admin writes only (T14).
+
+**A "test mode" client write is still a client write.** The order sheet's no-charge test path consumed gift cards with `UPDATE promo_codes SET active=false` from the browser — any signed-in user could deactivate any card. The webhook already did it server-side; the client copy was redundant and dangerous. Grep the client for writes to tables a server route also writes.
 
 ## (c) Auth Flows (lockout, reset, enumeration, 2FA, sessions)
 
@@ -152,6 +183,10 @@ The distilled, battle-tested lessons behind every check. Each lesson: **principl
 - `42501 "new row violates row-level security policy"` = the grant is STILL there; only a policy refused THAT row. Scoring both as "blocked" hid ~12 writable tables.
 - Codes that are NOT permission results: `400 PGRST204` ("column not found" — PostgREST's own check, before Postgres); `22P02` (id filter type wrong); `55000` (unwritable view); `23502` (NOT NULL — grant present, constraint hit); `23505` (duplicate — grant+RLS passed). Get real column names + id types from `GET /rest/v1/` with the SERVICE key + `Accept: application/openapi+json`.
 
+**Rows visible ≠ rows leaked: verify ownership before reporting.** A signed-in probe account returned 12 orders after scoping; 10 were its own test orders and 2 belonged to the QA claim it is a staff manager on. The "leak" was the probe subject's own role. Pull `staff_members` / owned claims with the service key and classify every visible row; report `outside own/staff rows: N`, not `visible: N`. Prefer a freshly created non-vendor account as the control.
+
+**Sandboxed sessions may refuse write probes against prod even when inert (no-match filters, disabled payloads).** Split the harness: a read-only probe you can run any time (sign in, SELECT sweep, POST to gated routes expecting 401/403), and a short list of inert write probes handed to the operator to run by hand with the expected code next to each.
+
 **Never trust a scanner/probe/grep result without asserting it against a case whose answer you already know — and the control must span the failure mode.** A control that shares the broken assumption is decoration. Carry MULTIPLE controls spanning every id shape and both outcomes (a known-blocked uuid-id table, a known-blocked integer-id table, a known-OPEN insert). Report UNKNOWN rather than folding ambiguity into "open". No-match UPDATE/DELETE filters: `<col>=is.null&<col>=not.is.null` (type-agnostic, matches nothing), never a hard-coded uuid.
 
 **PostgREST insert/`Prefer: return=representation` rolls back on insert-only tables → false "blocked".** `return=representation` SELECTs the row back after inserting, so on an insert-only table the whole transaction fails 42501 and rolls back — every insert-only table reads as blocked. Probe inserts WITHOUT `return=representation`, or cross-check against a table the live app is known to write.
@@ -202,7 +237,7 @@ The distilled, battle-tested lessons behind every check. Each lesson: **principl
 
 **`encodeURIComponent` does NOT neutralize SQL `LIKE` metacharacters — PostgREST decodes `%25`→`%` and rewrites `*`→`%`.** User input in an `ilike.` position is an injection/enumeration vector; validate the alphabet (allow `[A-Za-z0-9.-]`, kill `% _ * \`).
 
-**Vercel "sensitive" env vars are write-only — `vercel env pull` writes `""`.** Normal, not corruption. Keep a copy of local creds in your own secrets store outside the repo.
+**Vercel "sensitive" env vars are write-only — `vercel env pull` writes `""`.** Normal, not corruption. Source local creds from `.secrets/`.
 
 **Env-pasted secrets can carry an embedded newline mid-value; `.trim()` misses it.** A line-wrapped JWT survives `.trim()`, then `Headers.set` throws `invalid header value`. Normalize base64/JWT/hex env secrets with `.replace(/\s+/g,"")`.
 
@@ -229,3 +264,23 @@ The distilled, battle-tested lessons behind every check. Each lesson: **principl
 - **A guard that passes before the fix is worthless.** Verify every new assertion FAILS against the unfixed state first. Wire tests into an actual CI job.
 - **Live actions have real side effects — batch, don't iterate live.** Every rehearsal run sends REAL email; every probe against an open verb writes a real prod row. Diagnose against the service key directly; run the full live flow only to CONFIRM.
 - **Don't over-verify.** One clean pass then ship; flag wasted time rather than creating it — balanced against never concluding presence/absence from a single look.
+
+## (j) Business Logic & Money/State Abuse
+The class scanners structurally can't find and the structural checklist (1–39) doesn't reach: flaws in the gap between **what you specified** and **what the server will accept**. Highest-$ impact, hardest to detect, and present in every app with money, multi-user/tenant data, or metered actions — not only payment apps. Covers items 40–46; fixes in [T15]/[T16].
+
+- **LAW — the client proposes intent, the server decides money.** Any value that becomes a charge, credit, balance, quantity, currency, or entitlement is derived server-side from a trusted row. A price/amount/qty/currency/discount in a request body is a finding (#41) — this is #12 generalized to the whole cart.
+- **LAW — check-then-act is a race.** Coupon "used? → mark used", balance "enough? → debit", seat "under cap? → add", reward "claimed? → grant" all double-spend under concurrent requests. Make it one atomic statement whose WHERE fails when exhausted, with a DB CHECK / unique-index backstop (#42, #43; [T15]). Concurrency bugs are invisible to a serial probe — **fire parallel** and assert exactly one win.
+- **LAW — state machines are enforced server-side or not at all.** If the server honors `/confirm`, `/activate`, `/provision`, or claim-reward without the prerequisite steps recorded, the UI order is decoration (#40). One-time actions need an idempotency key / unique constraint so a replay fails at the DB, and the conflict must map to "already done", never a silent 200.
+- **LAW — RLS is not tenant isolation for service-role routes.** RLS scopes direct reads with the user's JWT; a service-role `/api` route, an aggregate, an export, or a webhook job runs RLS-exempt and must re-scope **every** id in code (#44; [T16]). The classic leak is a bulk endpoint that scopes the first id and trusts the rest. Return 404 cross-tenant, not 403 — don't leak existence.
+- **LAW — entitlement is a server fact, not a UI state.** Feature flags, seat counts, trial status, usage caps — enforced at the action on the plan/subscription row, never a client claim (#45). Grep for toggles that hide a button but leave `/api/<feature>` open.
+- The highest-paying bug-bounty class and the one least visible in review: refund-more-than-paid, coupon stacking, negative/float quantity, currency confusion, payout-account race, tenant-id substitution, trial-flag bypass, referral-grant replay. Walk each money/state flow as a state machine and attack the **transitions**, not the endpoints.
+
+## (k) Server-Side Fetch, Redirects & Disclosure
+OWASP classes that aren't database or money bugs but ship by accident; universal to any stack. Covers items 18 (upload), 30 (log hygiene), 47–51; fixes in [T17]/[T18].
+- **LAW — a URL from the client is an attacker's pointer.** Any server-side fetch of a user-supplied URL (previews, imports, avatars, outbound webhooks, PDF/screenshot render, OIDC discovery) is SSRF until proven otherwise (#47). Allowlist host + scheme, block private/loopback/link-local/metadata ranges, forbid or re-validate redirects, and pin the resolved IP (resolve-then-connect) to beat DNS rebinding. Never reflect the fetched body/headers back.
+- **LAW — never redirect to a URL the client chose.** Post-login/action redirects go to a same-site relative path or an allowlisted host only (#48); an open redirect launders phishing and leaks `code`/tokens. A protocol-relative `//host` is offsite — block it.
+- **LAW — prod tells the user nothing about its internals.** No stack traces, SQL, paths, or version banners in responses (#49) — generic message + a server-side log id. Strip `X-Powered-By`, turn off debug branches.
+- **LAW — compare secrets in constant time.** Signatures, API keys, tokens: `timingSafeEqual`/`compare_digest`, never `===` (#50). Prefer the provider SDK's own verifier.
+- **LAW — uploads are hostile bytes.** A MIME allowlist is necessary, not sufficient: SVG can carry script (stored XSS), filenames carry traversal, and serving uploads from the app's cookie origin turns a stored file into same-origin JS. Serve from a sandboxed origin under server-generated keys, with `nosniff` + `Content-Disposition` (#18).
+- **LAW — logs are a breach surface.** Redact secrets/tokens/PII before they reach a log or an aggregator (#30).
+- **LAW — delegated auth is still your boundary.** OAuth/OIDC: verify `state`/PKCE (or it's login CSRF), exact-match `redirect_uri`, verify token sig + `aud`/`iss`/`exp`, check `email_verified` before linking by email. Self-issued tokens: pin the alg, short expiry, strong server-only secret, revoke on logout/password change (#51).

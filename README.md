@@ -4,7 +4,7 @@
 
 **A Claude Code / agent skill that audits any web app's security AND launch-readiness, tells you exactly what's missing with the fix for each gap, and implements the fixes.**
 
-Most "security checklists" are lists of things to worry about. Security Doctor is different: every one of its 39 checks (33 manual + a 6-tool automated scanner layer) tells the agent **how to detect the gap in your actual codebase** (a grep pattern or a live probe against your running app), **which fix closes it** (one of 12 copy-paste SQL/JS templates), and **how to verify the fix actually landed** — so you get a scored report backed by evidence, not vibes.
+Most "security checklists" are lists of things to worry about. Security Doctor is different: every one of its 51 checks (45 manual + a 6-tool automated scanner layer) tells the agent **how to detect the gap in your actual codebase** (a grep pattern or a live probe against your running app), **which fix closes it** (one of 18 copy-paste SQL/JS templates), and **how to verify the fix actually landed** — so you get a scored report backed by evidence, not vibes.
 
 It's deepest on the **Supabase + Vercel + Stripe** stack (where a browser-shipped anon key makes every database permission a public one), but the underlying laws are stack-portable.
 
@@ -18,7 +18,7 @@ If your frontend talks to Supabase with a publishable/anon key, that key is in y
 
 Security Doctor was distilled from real production audits into a single reusable skill so you don't have to re-learn each of these the hard way.
 
-## What it checks (39 points, 9 domains)
+## What it checks (51 points, 11 domains)
 
 | Domain | Examples |
 |---|---|
@@ -30,23 +30,26 @@ Security Doctor was distilled from real production audits into a single reusable
 | **Surface area** | admin gated in middleware, server-side role re-check, strip test scaffolding, CSRF |
 | **Data & visibility** | anon write lockdown, column-level exposure, RLS (no `USING(true)`), `SECURITY DEFINER` RPC revoke, privilege-escalation columns |
 | **Supply chain & CI** | no secrets in git history, dependency scan, security tests wired into CI |
+| **Business logic & money/state abuse** | server derives every amount (not just price), single-use/atomic coupons & credits, refunds/payouts bounded to the payment, tenant/ownership boundary on reads **and** writes, server-side quota/entitlement, anti-automation, state-machine integrity (no step-skip/replay) |
+| **Server-side & disclosure** | SSRF allowlist (block private/metadata ranges), no open redirects, no verbose errors/version banners in prod, constant-time secret compare, external-auth (OAuth/OIDC `state`+PKCE, exact `redirect_uri`, JWT `alg`/`exp`) |
 
-## The launch-readiness pass (domains 10–13)
+## The launch-readiness pass (domains 10–14)
 
-Security says "can this app be hacked?" — the pre-app checklist asks **"is this app ready to launch?"** Four more domains in [`references/launch-checklist.md`](references/launch-checklist.md), run with the same verify-don't-infer discipline:
+Security says "can this app be hacked?" — the pre-app checklist asks **"is this app ready to launch?"** Five more domains (the last advisory) in [`references/launch-checklist.md`](references/launch-checklist.md), run with the same verify-don't-infer discipline:
 
 - **10 · Legal & compliance** — privacy policy exists and matches reality (data collected, AI use disclosed, third-party processors named), deletion promises actually honored (probe the storage URL), no private data in public buckets, no fabricated testimonials, cancellation as easy as signup, trial auto-renew reminders, AI chat surfaces carry a self-harm/crisis response.
 - **11 · Auth hardening extras** — rate-limited password reset (and a reset flow that doesn't dead-end), breached-password screening, session-storage reviewed as a decision, 2FA proportional to stakes.
 - **12 · Last-mile polish** — the 20-minute sweep: broken links, favicon/OG, titles/meta, custom 404, form success/error states, clickable tel:/mailto:, no horizontal scroll, mobile everything.
 - **13 · Day-one retention & commercial readiness** — glanceable home-screen widget shipping WITH the app, pricing sanity, contextual push prompt, share paths.
+- **14 · Operational resilience & disclosure (advisory)** — a backup you've actually *restored* + point-in-time recovery, external uptime monitoring + a public status page, same-day cost/spend alerts (a runaway loop is a money bug), a vulnerability-disclosure path (`/.well-known/security.txt`), a pre-launch load test, and operator incident levers (force-logout every session for one account, a feature kill switch). Reported with a severity, not folded into the score.
 
 Field lessons from real launch passes (absolute legal links across subdomains, the shared-minlength lockout trap, CASCADE-vs-storage orphans, per-add-on click-to-cancel) are at the bottom of the file.
 
 ## The App Doctor Score
 
-Every audit ends with **one number out of 100** — how much was already set up before the audit walked in. 74 checks summing to exactly 100 points: 🔴 the 14 criticals (exploitable-now / sue-now) are 4 points each (56), 🟡 the 40 important hardening checks are 1 point each (40), 🟢 the 20-item polish sweep shares a 4-point bucket; N/A items (no payments, no AI) rescale within their tier so every audit is still out of 100 and features you don't have never count against you. Two honesty caps keep the number from flattering: any open security critical caps the score at **49**, an open legal blocker caps it at **69** — an app leaking data doesn't get to score 80 on neatness. 90+ means you barely needed the audit; below 50 means the fix pass is the point.
+Every audit ends with **one number out of 100** — how much was already set up before the audit walked in. 86 checks summing to exactly 100 points: 🔴 a 56-point critical tier spread across the applicable criticals (exploitable-now / lose-money-now / sue-now; 18 when all apply), 🟡 40 points across the important hardening checks (up to 48), 🟢 a 4-point shared bucket for the 20-item polish sweep; N/A items (no payments, no AI) rescale within their tier so every audit is still out of 100 and features you don't have never count against you. Two honesty caps keep the number from flattering: any open security critical caps the score at **49**, an open legal blocker caps it at **69** — an app leaking data doesn't get to score 80 on neatness. 90+ means you barely needed the audit; below 50 means the fix pass is the point.
 
-## The 12 fix templates
+## The 18 fix templates
 
 Copy-paste-and-adapt SQL + JS, each with its pitfalls:
 
@@ -62,10 +65,16 @@ Copy-paste-and-adapt SQL + JS, each with its pitfalls:
 10. CSP staged rollout (report-only → collect → enforce) + inline-handler removal
 11. Admin middleware host gating (edge, normalized pathname)
 12. Security-events table + alerting (one attack = one page)
+13. Grant-inventory triad + admin-mimic lockdown migrations (open policies · RLS-off tables · client-role grants)
+14. Membership / privileged-column guard — escalation tables (staff/team/collaborator) owner-or-admin only, never self-service
+15. Business-logic & money guards — server-derived amounts, single-use atomic coupons/credits, bounded refunds/payouts, idempotency + state-machine integrity
+16. Tenant / ownership boundary + server-side quota & entitlement (re-scope in service-role code, exports, bulk ops)
+17. SSRF allowlist — resolve-then-connect, block private / loopback / metadata ranges, no open redirects
+18. Open-redirect + external-auth hardening (OAuth/OIDC `state`+PKCE, exact `redirect_uri`, self-issued JWT `alg`/`exp`)
 
 ## The scanner layer (domain 9)
 
-The 33 manual checks are things you verify by hand or live probe. The scanner layer is the **automated tools that catch whole classes the manual pass structurally can't see** — supply-chain malware, your own code's taint paths, live external exposure, CI-workflow attack surface. Run them as part of every audit; wire the cheap ones into CI as a ratchet. Full install + commands in [`references/tooling.md`](references/tooling.md).
+The 45 manual checks are things you verify by hand or live probe. The scanner layer is the **automated tools that catch whole classes the manual pass structurally can't see** — supply-chain malware, your own code's taint paths, live external exposure, CI-workflow attack surface. Run them as part of every audit; wire the cheap ones into CI as a ratchet. Full install + commands in [`references/tooling.md`](references/tooling.md).
 
 | Tool | Catches what nothing else does |
 |---|---|
@@ -99,7 +108,7 @@ Scope → Recon → Audit → Report → Fix & Ratchet
 
 0. **Scope** — confirm the stack and which surfaces are live (auth / payments / uploads / AI / admin); skip inapplicable sections honestly.
 1. **Recon** — map hosts, API routes, DB tables + RPCs, middleware; pull the anon key from live source; get real column types from PostgREST.
-2. **Audit** — walk all 39 checks, grepping the *live-served* code, live-probing, **and** running the scanner layer; record `✅ / ❌ / ⚠️` with evidence per item.
+2. **Audit** — walk all 51 checks, grepping the *live-served* code, live-probing, **and** running the scanner layer; record `✅ / ❌ / ⚠️` with evidence per item.
 3. **Report** — a scored table, then the gap list in priority order (unauthenticated escalation + live data leaks first), each with the concrete fix.
 4. **Fix** — implement the safe, reversible fixes in the same pass; propose destructive/broad ones with the exact migration.
 5. **Ratchet** — leave a CI probe so the fix can't silently regress (a guard that passes before the fix is worthless).
@@ -133,11 +142,11 @@ The skill loads its checklist, runs the loop above, and hands you the scored rep
 ```
 SKILL.md                      # the workflow the agent follows
 references/
-  checklist.md                # the 39-item scored checklist (detect + fix-ref per item)
+  checklist.md                # the 51-item scored checklist (detect + fix-ref per item)
   tooling.md                  # the scanner layer — Semgrep, TruffleHog, Nuclei, zizmor, Socket, promptfoo
-  fix-templates.md            # 12 copy-paste-and-adapt SQL/JS fixes, with pitfalls
+  fix-templates.md            # 18 copy-paste-and-adapt SQL/JS fixes, with pitfalls
   knowledge-base.md           # the "why" behind every check, grouped by theme
-  launch-checklist.md         # the pre-app / launch-readiness pass (domains 10-13)
+  launch-checklist.md         # the pre-app / launch-readiness pass (domains 10-14)
 app-doctor-map.png            # one-page visual of the whole skill
 ```
 
